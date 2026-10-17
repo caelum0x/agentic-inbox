@@ -55,6 +55,36 @@ export async function handleReplyEmail(c: AppContext) {
 
 	const attachmentData = await storeAttachments(c.env.BUCKET, messageId, attachments);
 
+	// Actually deliver the email BEFORE recording it as sent. Previously this
+	// was fired via waitUntil + a swallowed .catch(console.error), so a real
+	// delivery failure (bad domain config, suppressed recipient, etc.) was
+	// invisible to the caller: the email was still stored in Sent and the
+	// operator was told "sent" even though it never left. Await the real
+	// send and only persist/confirm on success, same as toolSendReply in
+	// workers/lib/tools.ts.
+	try {
+		await sendEmail(c.env.EMAIL, {
+			to,
+			cc,
+			bcc,
+			from,
+			subject,
+			html,
+			text,
+			attachments: attachments?.map((att) => ({
+				content: att.content,
+				filename: att.filename,
+				type: att.type,
+				disposition: att.disposition,
+				contentId: att.contentId,
+			})),
+			headers: buildThreadingHeaders(originalMsgId, references),
+		});
+	} catch (e) {
+		console.error("Reply delivery failed:", (e as Error).message);
+		return c.json({ error: `Failed to send reply: ${(e as Error).message}` }, 502);
+	}
+
 	await stub.createEmail(
 		Folders.SENT,
 		{
@@ -87,29 +117,7 @@ export async function handleReplyEmail(c: AppContext) {
 
 	await stub.markThreadRead(thread_id);
 
-	c.executionCtx.waitUntil(
-		sendEmail(c.env.EMAIL, {
-			to,
-			cc,
-			bcc,
-			from,
-			subject,
-			html,
-			text,
-			attachments: attachments?.map((att) => ({
-				content: att.content,
-				filename: att.filename,
-				type: att.type,
-				disposition: att.disposition,
-				contentId: att.contentId,
-			})),
-			headers: buildThreadingHeaders(originalMsgId, references),
-		}).catch((e) => {
-			console.error("Deferred reply delivery failed:", (e as Error).message);
-		}),
-	);
-
-	return c.json({ id: messageId, status: "sent" }, 202);
+	return c.json({ id: messageId, status: "sent" }, 200);
 }
 
 export async function handleForwardEmail(c: AppContext) {
@@ -145,6 +153,31 @@ export async function handleForwardEmail(c: AppContext) {
 
 	const attachmentData = await storeAttachments(c.env.BUCKET, messageId, attachments);
 
+	// Actually deliver the email BEFORE recording it as sent — see handleReplyEmail
+	// for why: a fire-and-forget waitUntil + swallowed .catch(console.error) let
+	// real delivery failures go completely unnoticed by the caller.
+	try {
+		await sendEmail(c.env.EMAIL, {
+			to,
+			cc,
+			bcc,
+			from,
+			subject,
+			html,
+			text,
+			attachments: attachments?.map((att) => ({
+				content: att.content,
+				filename: att.filename,
+				type: att.type,
+				disposition: att.disposition,
+				contentId: att.contentId,
+			})),
+		});
+	} catch (e) {
+		console.error("Forward delivery failed:", (e as Error).message);
+		return c.json({ error: `Failed to forward email: ${(e as Error).message}` }, 502);
+	}
+
 	await stub.createEmail(
 		Folders.SENT,
 		{
@@ -173,26 +206,5 @@ export async function handleForwardEmail(c: AppContext) {
 		attachmentData,
 	);
 
-	c.executionCtx.waitUntil(
-		sendEmail(c.env.EMAIL, {
-			to,
-			cc,
-			bcc,
-			from,
-			subject,
-			html,
-			text,
-			attachments: attachments?.map((att) => ({
-				content: att.content,
-				filename: att.filename,
-				type: att.type,
-				disposition: att.disposition,
-				contentId: att.contentId,
-			})),
-		}).catch((e) => {
-			console.error("Deferred forward delivery failed:", (e as Error).message);
-		}),
-	);
-
-	return c.json({ id: messageId, status: "sent" }, 202);
+	return c.json({ id: messageId, status: "sent" }, 200);
 }
