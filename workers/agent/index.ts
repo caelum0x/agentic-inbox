@@ -63,12 +63,15 @@ Write like a real person. Short, direct, flowing prose. Get to the point. Plain 
 
 **Agent Behavior Rules (CRITICAL):**
 - NEVER output meta-commentary about what you are doing (e.g. do not say "I am drafting a reply to Alex", "I checked the thread", etc).
-- When a new email arrives, your ONLY job is to call the \`draft_reply\` tool.
+- When a new email arrives, your job is to call either the \`draft_reply\` tool (if a reply is warranted) or the \`skip_email\` tool (if it is not).
 - DO NOT summarize the email. DO NOT explain your actions.
-- Output NOTHING except the tool call. If you must output text, it should ONLY be the literal draft text itself if tools fail.
+- Output NOTHING except the tool call. Never write free-form text as your response — any text you output outside of a tool call is saved as a draft reply, so writing an explanation instead of calling a tool creates a junk draft.
 - Before drafting ANY reply, carefully read the full thread history.
 - NEVER repeat information that was already shared in a prior message in the thread.
 - Your reply should only contain NEW information or directly respond to what the person just said. Move the conversation forward, don't rehash it.
+
+## When NOT to Reply
+Spam, sales pitches, newsletters, and automated notifications don't need a reply. Call \`skip_email\` with a short reason instead of \`draft_reply\` for these. Do not write your reasoning as plain text — that text would otherwise be saved as a junk draft addressed to the sender.
 
 ## Who Are You Replying To?
 Use the name the person gives in their email body / signature. That's their name - use it. The "from" address is where you send the reply, but the name in the email is how you greet them.
@@ -264,6 +267,23 @@ function createEmailTools(env: Env, mailboxId: string) {
 			}),
 			execute: async ({ draftId }): Promise<unknown> => {
 				return toolDiscardDraft(env, mailboxId, draftId);
+			},
+		}),
+
+		skip_email: defineTool({
+			description:
+				"Call this instead of draft_reply when an incoming email needs no reply — spam, sales pitches, newsletters, or automated notifications. This does not create a draft. Give a short reason.",
+			parameters: z.object({
+				reason: z
+					.string()
+					.describe("Short reason no reply is needed, e.g. 'Spam/sales pitch for a VA service'"),
+			}),
+			execute: async ({ reason }): Promise<unknown> => {
+				// No side effect — this exists purely so the agent has an explicit
+				// way to decline drafting a reply instead of returning free-form
+				// text, which the auto-draft fallback would otherwise save as a
+				// junk draft (see handleNewEmail).
+				return { skipped: true, reason };
 			},
 		}),
 	};
@@ -475,6 +495,46 @@ Based on the email content and thread context above, draft a reply using draft_r
 			const draftToolCalled = result.steps.some((step) =>
 				step.toolCalls.some((tc) => tc.toolName === "draft_reply" || tc.toolName === "draft_email"),
 			);
+
+			// The model explicitly declined to reply (spam, a sales pitch, a
+			// newsletter, etc). Skip the inline-text fallback entirely so its
+			// explanation doesn't get saved as a junk draft to the sender —
+			// log the reason to the agent chat instead.
+			//
+			// Only honor this if draft_reply/draft_email was NOT also called
+			// in the same run. A multi-step run (stepCountIs(5)) could in
+			// principle call both; if a draft was actually created, that side
+			// effect already happened and takes priority — falling through to
+			// the draftToolCalled branch below avoids silently discarding a
+			// real draft's existence from the logged chat message.
+			const skipCall = draftToolCalled
+				? undefined
+				: result.steps.flatMap((step) => step.toolCalls).find((tc) => tc.toolName === "skip_email");
+
+			if (skipCall) {
+				const input = skipCall.input as { reason?: unknown };
+				const reason = typeof input?.reason === "string" && input.reason.trim() ? input.reason.trim() : "no reason given";
+
+				const newMessages = [
+					{
+						id: crypto.randomUUID(),
+						role: "user" as const,
+						content: `[Auto-triggered] New email from ${emailData.sender}: "${emailData.subject}"`,
+						createdAt: new Date(),
+						parts: [{ type: "text" as const, text: `[Auto-triggered] New email from ${emailData.sender}: "${emailData.subject}"` }],
+					},
+					{
+						id: crypto.randomUUID(),
+						role: "assistant" as const,
+						content: `Skipped: ${reason}`,
+						createdAt: new Date(),
+						parts: [{ type: "text" as const, text: `Skipped: ${reason}` }],
+					},
+				];
+				await this.persistMessages([...this.messages, ...newMessages]);
+
+				return { status: "skipped", reason };
+			}
 
 			if (!draftToolCalled && result.text.trim()) {
 				// Model generated a draft inline as text -- verify with AI
