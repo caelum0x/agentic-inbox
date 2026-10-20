@@ -2,6 +2,7 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
+import { getAgentByName } from "agents";
 import { type Context, Hono } from "hono";
 import { cors } from "hono/cors";
 import PostalMime from "postal-mime";
@@ -410,11 +411,22 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 		thread_id: threadId, message_id: originalMessageId, raw_headers: JSON.stringify(parsedEmail.headers),
 	}, attachmentData);
 
-	const agentStub = env.EMAIL_AGENT.get(env.EMAIL_AGENT.idFromName(mailboxId));
-	ctx.waitUntil(agentStub.fetch(new Request("https://agents/onNewEmail", {
-		method: "POST", headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ mailboxId, emailId: messageId, sender: (parsedEmail.from?.address || "").toLowerCase(), subject: parsedEmail.subject || "", threadId }),
-	})).catch((e) => console.error("Auto-draft trigger failed:", (e as Error).message)));
+	// Resolve the agent stub via the SDK (not a raw DO .get()) so the
+	// set-name handshake runs first. Mailboxes that have never been opened
+	// in the UI have no persisted DO name yet; calling .fetch() on a raw
+	// stub for them 500s with "Missing namespace or room headers" because
+	// partyserver's Server.fetch() requires a name before it will route.
+	// getAgentByName() performs that handshake before returning the stub.
+	ctx.waitUntil(
+		getAgentByName(env.EMAIL_AGENT, mailboxId)
+			.then((agentStub) =>
+				agentStub.fetch(new Request("https://agents/onNewEmail", {
+					method: "POST", headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ mailboxId, emailId: messageId, sender: (parsedEmail.from?.address || "").toLowerCase(), subject: parsedEmail.subject || "", threadId }),
+				})),
+			)
+			.catch((e) => console.error("Auto-draft trigger failed:", (e as Error).message)),
+	);
 }
 
 export { app, receiveEmail };
