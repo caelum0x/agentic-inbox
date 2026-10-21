@@ -16,6 +16,7 @@ import {
 	buildThreadingHeaders,
 	listMailboxes,
 } from "./lib/email-helpers";
+import { maybeSendAutoReply, maybeForwardEmail, type AutoReplySettings, type ForwardingSettings } from "./lib/auto-respond";
 import { SendEmailRequestSchema } from "./lib/schemas";
 import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
 import { Folders } from "../shared/folders";
@@ -406,8 +407,14 @@ async function receiveEmail(event: ForwardableEmailMessage, env: Env, ctx: Execu
 		return;
 	}
 
+	const mailboxSettingsObj = await env.BUCKET.get(`mailboxes/${mailboxId}.json`);
+	if (!mailboxSettingsObj) { console.log(`Ignoring email for ${mailboxId}: mailbox does not exist`); return; }
+	const mailboxSettings = (await mailboxSettingsObj.json()) as {
+		forwarding?: ForwardingSettings;
+		autoReply?: AutoReplySettings;
+	};
+
 	const messageId = crypto.randomUUID();
-	if (!(await env.BUCKET.head(`mailboxes/${mailboxId}.json`))) { console.log(`Ignoring email for ${mailboxId}: mailbox does not exist`); return; }
 
 	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
 
@@ -456,15 +463,34 @@ async function receiveEmail(event: ForwardableEmailMessage, env: Env, ctx: Execu
 	// stub for them 500s with "Missing namespace or room headers" because
 	// partyserver's Server.fetch() requires a name before it will route.
 	// getAgentByName() performs that handshake before returning the stub.
+	const senderAddress = (parsedEmail.from?.address || "").toLowerCase();
 	ctx.waitUntil(
 		getAgentByName(env.EMAIL_AGENT, mailboxId)
 			.then((agentStub) =>
 				agentStub.fetch(new Request("https://agents/onNewEmail", {
 					method: "POST", headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ mailboxId, emailId: messageId, sender: (parsedEmail.from?.address || "").toLowerCase(), subject: parsedEmail.subject || "", threadId }),
+					body: JSON.stringify({ mailboxId, emailId: messageId, sender: senderAddress, subject: parsedEmail.subject || "", threadId }),
 				})),
 			)
 			.catch((e) => console.error("Auto-draft trigger failed:", (e as Error).message)),
+	);
+
+	// Inbound forwarding and the vacation responder were previously defined
+	// in mailbox settings (and settable via the API) but never actually
+	// acted on when mail arrived — the settings were stored and silently
+	// ignored. Wire both up for real, off the request's critical path.
+	ctx.waitUntil(
+		maybeForwardEmail({
+			env, mailboxId, forwarding: mailboxSettings.forwarding,
+			subject: parsedEmail.subject || "", senderAddress,
+			bodyHtml: parsedEmail.html || parsedEmail.text || "", bodyText: parsedEmail.text || "",
+		}).catch((e) => console.error("Auto-forward failed:", (e as Error).message)),
+	);
+	ctx.waitUntil(
+		maybeSendAutoReply({
+			env, stub, mailboxId, autoReply: mailboxSettings.autoReply,
+			senderAddress, threadId, headers: parsedEmail.headers,
+		}).catch((e) => console.error("Auto-reply failed:", (e as Error).message)),
 	);
 }
 

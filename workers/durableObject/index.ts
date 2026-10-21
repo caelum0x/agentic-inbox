@@ -909,4 +909,28 @@ export class MailboxDO extends DurableObject<Env> {
 
 		return attachmentRows;
 	}
+
+	// ── Auto-reply dedup ─────────────────────────────────────────────
+
+	/**
+	 * Returns true the first time this is called for a given thread within
+	 * `cooldownHours`, and records that attempt; returns false on every
+	 * subsequent call within the cooldown window.
+	 *
+	 * Used to cap the vacation-responder to one auto-reply per thread per
+	 * cooldown period — without this, a thread that keeps receiving mail
+	 * (e.g. the sender's own auto-responder replying back) would trigger an
+	 * auto-reply storm. Backed by the DO's key-value storage (not the SQL
+	 * tables), so it is wiped along with everything else by purgeAllData().
+	 */
+	async shouldSendAutoReply(threadId: string, cooldownHours = 24): Promise<boolean> {
+		const key = `auto-reply-sent:${threadId}`;
+		const lastSent = await this.ctx.storage.get<number>(key);
+		const now = Date.now();
+		if (typeof lastSent === "number" && now - lastSent < cooldownHours * 60 * 60 * 1000) {
+			return false;
+		}
+		await this.ctx.storage.put(key, now);
+		return true;
+	}
 }
