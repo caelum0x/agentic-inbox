@@ -4,7 +4,7 @@
 
 import type { Context } from "hono";
 import { sendEmail } from "../email-sender";
-import { storeAttachments } from "../lib/attachments";
+import { storeAttachments, copyAttachments } from "../lib/attachments";
 import type { EmailFull } from "../lib/schemas";
 import {
 	validateSender,
@@ -133,7 +133,7 @@ export async function handleForwardEmail(c: AppContext) {
 		return c.json({ error: "Original email not found" }, 404);
 	}
 
-	await resolveOriginalEmail(stub, rawOriginal);
+	const originalEmail = await resolveOriginalEmail(stub, rawOriginal);
 
 	let toStr: string, fromEmail: string, fromDomain: string;
 	try {
@@ -153,6 +153,21 @@ export async function handleForwardEmail(c: AppContext) {
 
 	const attachmentData = await storeAttachments(c.env.BUCKET, messageId, attachments);
 
+	// Carry over the original email's own attachments. The web UI has no
+	// attachment-upload control, so without this a forwarded email always
+	// arrived with its attachments silently stripped — every real email
+	// client forwards the original attachments by default.
+	const forwardedAttachments = await copyAttachments(
+		c.env.BUCKET,
+		originalEmail.id,
+		messageId,
+		originalEmail.attachments,
+	);
+	const allAttachmentData = [
+		...attachmentData,
+		...forwardedAttachments.map(({ content, ...meta }) => meta),
+	];
+
 	// Actually deliver the email BEFORE recording it as sent — see handleReplyEmail
 	// for why: a fire-and-forget waitUntil + swallowed .catch(console.error) let
 	// real delivery failures go completely unnoticed by the caller.
@@ -165,13 +180,22 @@ export async function handleForwardEmail(c: AppContext) {
 			subject,
 			html,
 			text,
-			attachments: attachments?.map((att) => ({
-				content: att.content,
-				filename: att.filename,
-				type: att.type,
-				disposition: att.disposition,
-				contentId: att.contentId,
-			})),
+			attachments: [
+				...(attachments?.map((att) => ({
+					content: att.content,
+					filename: att.filename,
+					type: att.type,
+					disposition: att.disposition,
+					contentId: att.contentId,
+				})) ?? []),
+				...forwardedAttachments.map((att) => ({
+					content: att.content,
+					filename: att.filename,
+					type: att.mimetype,
+					disposition: (att.disposition === "inline" ? "inline" : "attachment") as "attachment" | "inline",
+					contentId: att.content_id ?? undefined,
+				})),
+			],
 		});
 	} catch (e) {
 		console.error("Forward delivery failed:", (e as Error).message);
@@ -203,7 +227,7 @@ export async function handleForwardEmail(c: AppContext) {
 				{ key: "message-id", value: `<${outgoingMessageId}>` },
 			]),
 		},
-		attachmentData,
+		allAttachmentData,
 	);
 
 	return c.json({ id: messageId, status: "sent" }, 200);
