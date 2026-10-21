@@ -57,6 +57,22 @@ export async function storeAttachments(
 	return results;
 }
 
+/**
+ * Split an array into chunks of at most `size` elements each.
+ *
+ * R2Bucket.delete() rejects batches above 1000 keys, so callers that bulk
+ * delete an unbounded number of attachment objects (e.g. purging an entire
+ * deleted mailbox) must chunk the key list first.
+ */
+export function chunkArray<T>(items: T[], size: number): T[][] {
+	if (size <= 0) throw new Error("chunkArray: size must be positive");
+	const chunks: T[][] = [];
+	for (let i = 0; i < items.length; i += size) {
+		chunks.push(items.slice(i, i + size));
+	}
+	return chunks;
+}
+
 export interface CopiedAttachment extends StoredAttachment {
 	/** Base64-encoded bytes, so the caller can also hand this to sendEmail(). */
 	content: string;

@@ -879,4 +879,34 @@ export class MailboxDO extends DurableObject<Env> {
 			this.db.insert(schema.attachments).values(attachments).run();
 		}
 	}
+
+	// ── Mailbox deletion (raw SQL + storage.deleteAll) ──────────────
+
+	/**
+	 * Permanently wipe this mailbox's entire Durable Object (emails,
+	 * attachments, folders, migration-tracking table) and return every
+	 * attachment's R2 storage key first, so the caller can delete the
+	 * matching R2 objects.
+	 *
+	 * Without this, DELETE /api/v1/mailboxes/:mailboxId only removed the
+	 * R2 settings file — the mailbox's Durable Object (keyed by email
+	 * address via idFromName, so a future mailbox created with the same
+	 * address resolves to the exact same DO) kept every email and
+	 * attachment forever. Recreating a "deleted" mailbox with the same
+	 * address silently resurrected its full prior history: a real
+	 * data-retention bug for an email client that presents deletion as
+	 * final. `storage.deleteAll()` clears both the SQL tables and the
+	 * migration-tracking rows, so a future mailbox with the same address
+	 * starts from a genuinely blank DO (migrations re-run, default
+	 * folders get recreated from scratch).
+	 */
+	async purgeAllData(): Promise<AttachmentData[]> {
+		const attachmentRows = [
+			...this.ctx.storage.sql.exec(`SELECT id, email_id, filename, mimetype, size, content_id, disposition FROM attachments`),
+		] as unknown as AttachmentData[];
+
+		await this.ctx.storage.deleteAll();
+
+		return attachmentRows;
+	}
 }

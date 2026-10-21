@@ -8,7 +8,7 @@ import { cors } from "hono/cors";
 import PostalMime from "postal-mime";
 import { z } from "zod";
 import { sendEmail } from "./email-sender";
-import { storeAttachments, type StoredAttachment } from "./lib/attachments";
+import { storeAttachments, chunkArray, type StoredAttachment } from "./lib/attachments";
 import {
 	validateSender,
 	SenderValidationError,
@@ -137,7 +137,20 @@ app.delete("/api/v1/mailboxes/:mailboxId", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const key = `mailboxes/${mailboxId}.json`;
 	if (!(await c.env.BUCKET.head(key))) return c.json({ error: "Not found" }, 404);
-	await c.env.BUCKET.delete(key); // TODO: also delete DO data and R2 attachment blobs
+
+	// Wipe the mailbox's Durable Object (emails, attachments, folders) and
+	// collect every attachment's R2 key BEFORE removing the R2 settings
+	// file, so a mailbox later recreated with this same email address never
+	// resurrects the deleted mailbox's history. See purgeAllData() for why
+	// this previously-missing step mattered (idFromName makes the DO keyed
+	// by email address permanent across delete/recreate).
+	const stub = c.env.MAILBOX.get(c.env.MAILBOX.idFromName(mailboxId));
+	const attachmentRows = (await (stub as any).purgeAllData()) as StoredAttachment[];
+	for (const batch of chunkArray(attachmentRows, 1000)) {
+		await c.env.BUCKET.delete(batch.map((att) => `attachments/${att.email_id}/${att.id}/${att.filename}`));
+	}
+
+	await c.env.BUCKET.delete(key);
 	return c.body(null, 204);
 });
 
@@ -224,15 +237,32 @@ app.post("/api/v1/mailboxes/:mailboxId/drafts", async (c: AppContext) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const { to, cc, bcc, subject, body, in_reply_to, thread_id, draft_id } = DraftBody.parse(await c.req.json());
 	const stub = c.var.mailboxStub;
-	if (draft_id) await stub.deleteEmail(draft_id); // not atomic — create-then-delete would be safer
 	const messageId = crypto.randomUUID();
 	const now = new Date().toISOString();
+
+	// Create the new draft BEFORE deleting the one it supersedes. Autosave
+	// calls this endpoint repeatedly with draft_id set to the prior save's
+	// id; deleting first meant a failure in createEmail() (DO unavailable,
+	// a storage error, etc) silently destroyed the user's latest edits with
+	// nothing left to recover. Creating first means the same failure just
+	// leaves the old draft in place instead of losing data.
 	await stub.createEmail(Folders.DRAFT, {
 		id: messageId, subject: subject || "", sender: mailboxId.toLowerCase(),
 		recipient: (to || "").toLowerCase(), cc: cc?.toLowerCase() || null, bcc: bcc?.toLowerCase() || null,
 		date: now, body, in_reply_to: in_reply_to || null, email_references: null,
 		thread_id: thread_id || in_reply_to || messageId,
 	}, []);
+
+	if (draft_id) {
+		try {
+			await stub.deleteEmail(draft_id);
+		} catch (e) {
+			// Non-fatal: the new draft is already saved, so at worst this
+			// leaves a harmless superseded duplicate instead of losing data.
+			console.error("Failed to delete superseded draft:", (e as Error).message);
+		}
+	}
+
 	return c.json({ id: messageId, status: "draft", subject: subject || "", recipient: to || "", date: now }, 201);
 });
 

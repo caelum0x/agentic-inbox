@@ -3,7 +3,7 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { describe, expect, it, vi } from "vitest";
-import { copyAttachments } from "./attachments";
+import { chunkArray, copyAttachments } from "./attachments";
 import type { AttachmentInfo } from "./schemas";
 
 function makeBucket(objects: Record<string, { body: string }>) {
@@ -67,5 +67,34 @@ describe("copyAttachments", () => {
 
 		expect(result).toEqual([]);
 		expect(bucket.put).not.toHaveBeenCalled();
+	});
+});
+
+describe("chunkArray", () => {
+	it("returns an empty array for an empty input", () => {
+		expect(chunkArray([], 1000)).toEqual([]);
+	});
+
+	it("returns a single chunk when the input is smaller than the chunk size", () => {
+		expect(chunkArray([1, 2, 3], 1000)).toEqual([[1, 2, 3]]);
+	});
+
+	it("splits exactly at the boundary without an extra empty chunk", () => {
+		const items = Array.from({ length: 1000 }, (_, i) => i);
+		expect(chunkArray(items, 1000)).toHaveLength(1);
+	});
+
+	it("splits into multiple chunks when the input exceeds the chunk size", () => {
+		// R2Bucket.delete() rejects batches above 1000 keys — this is the
+		// exact scenario that matters for purging a large mailbox's attachments.
+		const items = Array.from({ length: 1001 }, (_, i) => i);
+		const chunks = chunkArray(items, 1000);
+		expect(chunks).toHaveLength(2);
+		expect(chunks[0]).toHaveLength(1000);
+		expect(chunks[1]).toEqual([1000]);
+	});
+
+	it("throws for a non-positive chunk size instead of looping forever", () => {
+		expect(() => chunkArray([1, 2], 0)).toThrow();
 	});
 });
