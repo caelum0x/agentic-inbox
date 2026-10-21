@@ -59,6 +59,20 @@ export interface Attachment {
 	disposition?: string;
 }
 
+/**
+ * A file the user has attached in the compose UI, read into memory as
+ * base64 so it can be sent straight through to the `attachments` field
+ * accepted by the send/reply/forward API endpoints.
+ */
+export interface ComposeAttachment {
+	id: string;
+	filename: string;
+	type: string;
+	size: number;
+	/** Base64-encoded file content (no `data:...;base64,` prefix). */
+	content: string;
+}
+
 export interface Folder {
 	id: string;
 	name: string;

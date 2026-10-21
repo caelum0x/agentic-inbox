@@ -5,11 +5,14 @@
 import { useKumoToastManager } from "@cloudflare/kumo";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
+	MAX_ATTACHMENTS_TOTAL_BYTES,
 	buildQuotedReplyBlock,
 	escapeHtml,
+	formatBytes,
 	formatComposeDate,
 	getSignatureBlock,
 	htmlToPlainText,
+	readFileAsBase64,
 	splitEmailList,
 	stripHtml,
 	toEmailListValue,
@@ -17,6 +20,7 @@ import {
 import { useDeleteEmail, useForwardEmail, useReplyToEmail, useSaveDraft, useSendEmail } from "~/queries/emails";
 import { useMailbox } from "~/queries/mailboxes";
 import { useUIStore } from "~/hooks/useUIStore";
+import type { ComposeAttachment } from "~/types";
 
 function appendUniqueAddress(
 	addresses: string[],
@@ -178,6 +182,8 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 	const [showCcBcc, setShowCcBcc] = useState(false);
 	const [subject, setSubject] = useState("");
 	const [body, setBody] = useState("");
+	const [attachments, setAttachments] = useState<ComposeAttachment[]>([]);
+	const [isAttaching, setIsAttaching] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [isSavingDraft, setIsSavingDraft] = useState(false);
 	const [isSending, setIsSending] = useState(false);
@@ -207,7 +213,52 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		setShowCcBcc(initialFields.showCcBcc);
 		setSubject(initialFields.subject);
 		setBody(initialFields.body);
+		setAttachments([]);
 	}, [composeOptions, currentMailbox?.email, sigBlock]);
+
+	const addAttachmentFiles = async (files: FileList | File[]) => {
+		const incoming = Array.from(files);
+		if (incoming.length === 0) return;
+
+		const currentTotal = attachments.reduce((sum, att) => sum + att.size, 0);
+		const incomingTotal = incoming.reduce((sum, file) => sum + file.size, 0);
+		if (currentTotal + incomingTotal > MAX_ATTACHMENTS_TOTAL_BYTES) {
+			const message = `Attachments can't exceed ${formatBytes(MAX_ATTACHMENTS_TOTAL_BYTES)} total.`;
+			setError(message);
+			toastManager.add({ title: message, variant: "error" });
+			return;
+		}
+
+		setIsAttaching(true);
+		setError(null);
+		const read: ComposeAttachment[] = [];
+		const failed: string[] = [];
+		for (const file of incoming) {
+			try {
+				const content = await readFileAsBase64(file);
+				read.push({
+					id: crypto.randomUUID(),
+					filename: file.name,
+					type: file.type || "application/octet-stream",
+					size: file.size,
+					content,
+				});
+			} catch {
+				failed.push(file.name);
+			}
+		}
+		if (read.length > 0) setAttachments((prev) => [...prev, ...read]);
+		setIsAttaching(false);
+		if (failed.length > 0) {
+			const message = `Couldn't attach: ${failed.join(", ")}`;
+			setError(message);
+			toastManager.add({ title: message, variant: "error" });
+		}
+	};
+
+	const removeAttachment = (id: string) => {
+		setAttachments((prev) => prev.filter((att) => att.id !== id));
+	};
 
 	const handleSaveDraft = async () => {
 		if (!mailboxId || isSending) return; setIsSavingDraft(true); setError(null);
@@ -248,6 +299,16 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 			subject,
 			html: body,
 			text: htmlToPlainText(body),
+			...(attachments.length > 0
+				? {
+						attachments: attachments.map((att) => ({
+							content: att.content,
+							filename: att.filename,
+							type: att.type,
+							disposition: "attachment" as const,
+						})),
+					}
+				: {}),
 		};
 		const draftId = composeOptions.draftEmail?.id; const mode = composeOptions.mode; const originalId = composeOptions.originalEmail?.id || composeOptions.draftEmail?.in_reply_to;
 		setIsSending(true); toastManager.add({ title: "Sending email..." });
@@ -262,5 +323,5 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		finally { setIsSending(false); }
 	};
 
-	return { to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc, subject, setSubject, body, setBody, error, setError, isSavingDraft, isSending, formTitle, handleSaveDraft, handleSend, closeCompose, closePanel };
+	return { to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc, subject, setSubject, body, setBody, attachments, isAttaching, addAttachmentFiles, removeAttachment, error, setError, isSavingDraft, isSending, formTitle, handleSaveDraft, handleSend, closeCompose, closePanel };
 }

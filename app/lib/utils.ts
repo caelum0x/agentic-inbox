@@ -208,6 +208,38 @@ export function getAttachmentUrl(
 	return `/api/v1/mailboxes/${mailboxId}/emails/${emailId}/attachments/${attachmentId}`;
 }
 
+/**
+ * Maximum combined size (in bytes) of attachments on a single outgoing
+ * email. Cloudflare's Email Service enforces its own cap on the fully
+ * MIME-encoded message, so this client-side limit (well under that cap,
+ * accounting for base64's ~33% overhead) fails fast with a clear error
+ * instead of letting the user wait on a big upload only to have the send
+ * rejected by the backend.
+ */
+export const MAX_ATTACHMENTS_TOTAL_BYTES = 20 * 1024 * 1024; // 20MB
+
+/**
+ * Read a File's contents as a base64 string (no `data:...;base64,` prefix),
+ * for sending through the JSON `attachments` field on the send/reply/forward
+ * API endpoints.
+ */
+export function readFileAsBase64(file: File): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onload = () => {
+			const result = reader.result;
+			if (typeof result !== "string") {
+				reject(new Error(`Failed to read file: ${file.name}`));
+				return;
+			}
+			const commaIndex = result.indexOf(",");
+			resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
+		};
+		reader.onerror = () => reject(reader.error ?? new Error(`Failed to read file: ${file.name}`));
+		reader.readAsDataURL(file);
+	});
+}
+
 export function downloadFile(url: string, filename: string) {
 	const link = document.createElement("a");
 	link.href = url;

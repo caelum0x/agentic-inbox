@@ -3,9 +3,11 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { Banner, Button, Input } from "@cloudflare/kumo";
-import { FloppyDiskIcon, PaperPlaneTiltIcon, XIcon } from "@phosphor-icons/react";
+import { FileIcon, FloppyDiskIcon, PaperclipIcon, PaperPlaneTiltIcon, XIcon } from "@phosphor-icons/react";
+import { useRef } from "react";
 import { useParams } from "react-router";
 import { useComposeForm } from "~/hooks/useComposeForm";
+import { formatBytes } from "~/lib/utils";
 import RichTextEditor from "./RichTextEditor";
 
 export default function ComposePanel() {
@@ -27,6 +29,10 @@ export default function ComposePanel() {
 		setSubject,
 		body,
 		setBody,
+		attachments,
+		isAttaching,
+		addAttachmentFiles,
+		removeAttachment,
 		error,
 		isSavingDraft,
 		isSending,
@@ -36,6 +42,8 @@ export default function ComposePanel() {
 		closeCompose,
 		closePanel,
 	} = useComposeForm(mailboxId, folder);
+
+	const fileInputRef = useRef<HTMLInputElement>(null);
 
 	return (
 		<div className="flex flex-col h-full bg-kumo-base">
@@ -145,6 +153,55 @@ export default function ComposePanel() {
 							value={body}
 							onChange={setBody}
 						/>
+					</div>
+
+					<div className="space-y-2">
+						<div className="flex items-center justify-between">
+							<label className="text-sm font-medium text-kumo-subtle">
+								Attachments
+							</label>
+							<button
+								type="button"
+								onClick={() => fileInputRef.current?.click()}
+								disabled={isAttaching}
+								className="inline-flex items-center gap-1.5 text-xs font-medium text-kumo-link hover:text-kumo-link-hover disabled:opacity-50"
+							>
+								<PaperclipIcon size={14} />
+								{isAttaching ? "Attaching..." : "Attach files"}
+							</button>
+							<input
+								ref={fileInputRef}
+								type="file"
+								multiple
+								className="hidden"
+								onChange={(e) => {
+									if (e.target.files?.length) addAttachmentFiles(e.target.files);
+									e.target.value = "";
+								}}
+							/>
+						</div>
+						{attachments.length > 0 && (
+							<div className="flex flex-wrap gap-2">
+								{attachments.map((att) => (
+									<span
+										key={att.id}
+										className="inline-flex items-center gap-2 rounded-md border border-kumo-line px-2.5 py-1.5 text-xs"
+									>
+										<FileIcon size={14} className="text-kumo-subtle shrink-0" />
+										<span className="font-medium truncate max-w-[160px]">{att.filename}</span>
+										<span className="text-kumo-subtle">{formatBytes(att.size)}</span>
+										<button
+											type="button"
+											onClick={() => removeAttachment(att.id)}
+											aria-label={`Remove ${att.filename}`}
+											className="text-kumo-subtle hover:text-kumo-default"
+										>
+											<XIcon size={12} />
+										</button>
+									</span>
+								))}
+							</div>
+						)}
 					</div>
 				</div>
 
