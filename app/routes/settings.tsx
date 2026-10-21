@@ -2,11 +2,12 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { Badge, Button, Input, Loader, useKumoToastManager } from "@cloudflare/kumo";
-import { RobotIcon, ArrowCounterClockwiseIcon } from "@phosphor-icons/react";
+import { Badge, Button, Input, Loader, Switch, useKumoToastManager } from "@cloudflare/kumo";
+import { RobotIcon, ArrowCounterClockwiseIcon, PaperPlaneTiltIcon, SignatureIcon, ShareNetworkIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { useMailbox, useUpdateMailbox } from "~/queries/mailboxes";
+import type { MailboxSettings } from "~/types";
 
 // Placeholder shown in the textarea when no custom prompt is set.
 // The authoritative default prompt lives in workers/agent/index.ts (DEFAULT_SYSTEM_PROMPT).
@@ -20,22 +21,43 @@ export default function SettingsRoute() {
 
 	const [displayName, setDisplayName] = useState("");
 	const [agentPrompt, setAgentPrompt] = useState("");
+	const [signatureEnabled, setSignatureEnabled] = useState(false);
+	const [signatureText, setSignatureText] = useState("");
+	const [forwardingEnabled, setForwardingEnabled] = useState(false);
+	const [forwardingEmail, setForwardingEmail] = useState("");
+	const [autoReplyEnabled, setAutoReplyEnabled] = useState(false);
+	const [autoReplySubject, setAutoReplySubject] = useState("");
+	const [autoReplyMessage, setAutoReplyMessage] = useState("");
 	const [isSaving, setIsSaving] = useState(false);
 
 	useEffect(() => {
 		if (mailbox) {
 			setDisplayName(mailbox.settings?.fromName || mailbox.name || "");
 			setAgentPrompt(mailbox.settings?.agentSystemPrompt || "");
+			setSignatureEnabled(mailbox.settings?.signature?.enabled ?? false);
+			setSignatureText(mailbox.settings?.signature?.text || "");
+			setForwardingEnabled(mailbox.settings?.forwarding?.enabled ?? false);
+			setForwardingEmail(mailbox.settings?.forwarding?.email || "");
+			setAutoReplyEnabled(mailbox.settings?.autoReply?.enabled ?? false);
+			setAutoReplySubject(mailbox.settings?.autoReply?.subject || "");
+			setAutoReplyMessage(mailbox.settings?.autoReply?.message || "");
 		}
 	}, [mailbox]);
 
 	const handleSave = async () => {
 		if (!mailbox || !mailboxId) return;
 		setIsSaving(true);
-		const settings = {
+		const settings: MailboxSettings = {
 			...mailbox.settings,
 			fromName: displayName,
 			agentSystemPrompt: agentPrompt.trim() || undefined,
+			signature: { enabled: signatureEnabled, text: signatureText },
+			forwarding: { enabled: forwardingEnabled, email: forwardingEmail.trim() },
+			autoReply: {
+				enabled: autoReplyEnabled,
+				subject: autoReplySubject,
+				message: autoReplyMessage,
+			},
 		};
 		try {
 			await updateMailboxMutation.mutateAsync({ mailboxId, settings });
@@ -124,6 +146,92 @@ export default function SettingsRoute() {
 						The prompt is sent as the system message to the AI model.
 						It controls the agent's personality, writing style, and behavior rules.
 					</p>
+				</div>
+
+				{/* Signature */}
+				<div className="rounded-lg border border-kumo-line bg-kumo-base p-5">
+					<div className="flex items-center justify-between mb-4">
+						<div className="flex items-center gap-2">
+							<SignatureIcon size={16} weight="duotone" className="text-kumo-subtle" />
+							<span className="text-sm font-medium text-kumo-default">Signature</span>
+						</div>
+						<Switch
+							checked={signatureEnabled}
+							onCheckedChange={setSignatureEnabled}
+							size="sm"
+						/>
+					</div>
+					<p className="text-xs text-kumo-subtle mb-3">
+						Appended automatically to new messages, replies, and forwards composed from this mailbox.
+					</p>
+					<textarea
+						value={signatureText}
+						onChange={(e) => setSignatureText(e.target.value)}
+						placeholder="Best,\nJane Doe"
+						rows={4}
+						disabled={!signatureEnabled}
+						className="w-full resize-y rounded-lg border border-kumo-line bg-kumo-recessed px-3 py-2 text-xs text-kumo-default placeholder:text-kumo-subtle focus:outline-none focus:ring-1 focus:ring-kumo-ring leading-relaxed disabled:opacity-50"
+					/>
+				</div>
+
+				{/* Forwarding */}
+				<div className="rounded-lg border border-kumo-line bg-kumo-base p-5">
+					<div className="flex items-center justify-between mb-4">
+						<div className="flex items-center gap-2">
+							<ShareNetworkIcon size={16} weight="duotone" className="text-kumo-subtle" />
+							<span className="text-sm font-medium text-kumo-default">Forward incoming mail</span>
+						</div>
+						<Switch
+							checked={forwardingEnabled}
+							onCheckedChange={setForwardingEnabled}
+							size="sm"
+						/>
+					</div>
+					<p className="text-xs text-kumo-subtle mb-3">
+						Every new email received by this mailbox is also sent as a copy to the address below.
+					</p>
+					<Input
+						type="email"
+						placeholder="backup@example.com"
+						value={forwardingEmail}
+						onChange={(e) => setForwardingEmail(e.target.value)}
+						disabled={!forwardingEnabled}
+					/>
+				</div>
+
+				{/* Auto-Reply */}
+				<div className="rounded-lg border border-kumo-line bg-kumo-base p-5">
+					<div className="flex items-center justify-between mb-4">
+						<div className="flex items-center gap-2">
+							<PaperPlaneTiltIcon size={16} weight="duotone" className="text-kumo-subtle" />
+							<span className="text-sm font-medium text-kumo-default">Auto-reply (vacation responder)</span>
+						</div>
+						<Switch
+							checked={autoReplyEnabled}
+							onCheckedChange={setAutoReplyEnabled}
+							size="sm"
+						/>
+					</div>
+					<p className="text-xs text-kumo-subtle mb-3">
+						Sends this reply automatically to each new sender, at most once per conversation per day.
+					</p>
+					<div className="space-y-3">
+						<Input
+							label="Subject"
+							placeholder="Away from email"
+							value={autoReplySubject}
+							onChange={(e) => setAutoReplySubject(e.target.value)}
+							disabled={!autoReplyEnabled}
+						/>
+						<textarea
+							value={autoReplyMessage}
+							onChange={(e) => setAutoReplyMessage(e.target.value)}
+							placeholder="I'm currently away and will respond when I'm back."
+							rows={4}
+							disabled={!autoReplyEnabled}
+							className="w-full resize-y rounded-lg border border-kumo-line bg-kumo-recessed px-3 py-2 text-xs text-kumo-default placeholder:text-kumo-subtle focus:outline-none focus:ring-1 focus:ring-kumo-ring leading-relaxed disabled:opacity-50"
+						/>
+					</div>
 				</div>
 
 				{/* Save */}
