@@ -603,14 +603,47 @@ export class MailboxDO extends DurableObject<Env> {
 		}
 	}
 
-	async updateFolder(id: string, name: string) {
-		const result = this.db
-			.update(schema.folders)
-			.set({ name })
+	async updateFolder(
+		id: string,
+		name: string,
+	): Promise<
+		| { id: string; name: string }
+		| { error: "not_found" | "system_folder" | "duplicate_name" }
+	> {
+		// Renaming was previously unguarded: any caller could rename a
+		// system folder (inbox, sent, draft, archive, trash, spam) to
+		// anything, including colliding with another folder's name (an
+		// unhandled UNIQUE constraint throw) or an empty string. deleteFolder
+		// already protects system folders via is_deletable -- updateFolder
+		// needs the same check, plus the same UNIQUE-constraint handling
+		// createFolder already does.
+		const folder = this.db
+			.select({ is_deletable: schema.folders.is_deletable })
+			.from(schema.folders)
 			.where(eq(schema.folders.id, id))
-			.returning({ id: schema.folders.id, name: schema.folders.name })
 			.get();
-		return result;
+
+		if (!folder) {
+			return { error: "not_found" };
+		}
+		if (folder.is_deletable === 0) {
+			return { error: "system_folder" };
+		}
+
+		try {
+			const result = this.db
+				.update(schema.folders)
+				.set({ name })
+				.where(eq(schema.folders.id, id))
+				.returning({ id: schema.folders.id, name: schema.folders.name })
+				.get();
+			return result;
+		} catch (e: unknown) {
+			if (e instanceof Error && e.message.includes("UNIQUE constraint failed")) {
+				return { error: "duplicate_name" };
+			}
+			throw e;
+		}
 	}
 
 	async deleteFolder(id: string) {
