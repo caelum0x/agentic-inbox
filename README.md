@@ -23,17 +23,17 @@ https://github.com/cloudflare/agentic-inbox/issues/4#issuecomment-4269118513
 
      [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/cloudflare/agentic-inbox)
 
-2. **Configure Cloudflare Access** -- Enable [one-click Cloudflare Access](https://developers.cloudflare.com/changelog/post/2025-10-03-one-click-access-for-workers/) on your Worker under Settings > Domains & Routes. The modal will show your `POLICY_AUD` and `TEAM_DOMAIN` values. `TEAM_DOMAIN` can be either your Access team URL or the full `.../cdn-cgi/access/certs` URL. **You must set these as secrets for your Worker.**
+2. **Configure Scribase auth** -- This fork authenticates against [Scribase](https://scribase.com) (a self-hosted, Supabase-compatible auth/db backend) instead of Cloudflare Access. Create a Scribase project with email/password sign-in enabled, then set `SCRIBASE_URL` and `OWNER_EMAIL` in `wrangler.jsonc` `vars` and `SCRIBASE_ANON_KEY` as a Worker secret (`wrangler secret put SCRIBASE_ANON_KEY`). Only the account whose email matches `OWNER_EMAIL` can sign in; every other Scribase account is refused even if its credentials are valid.
 3. **Set up Email Routing** -- In the Cloudflare dashboard, go to your domain > Email Routing and create a catch-all rule that forwards to this Worker
 4. **Enable Email Service** -- The worker needs the `send_email` binding to send outbound emails. See [Email Service docs](https://developers.cloudflare.com/email-routing/email-workers/send-email-workers/)
 5. **Create a mailbox** -- Visit your deployed app and create a mailbox for any address on your domain (e.g. `hello@example.com`)
 
-### Troubleshooting Access
+### Troubleshooting auth
 
-1. If you see `Invalid or expired Access token`, that usually means `POLICY_AUD` or `TEAM_DOMAIN` secrets are incorrect.
-   * Resolution: [turn Access off and back on for the Worker to get the Access modal again](https://developers.cloudflare.com/changelog/post/2025-10-03-one-click-access-for-workers/), then reset your Worker secrets to the latest `POLICY_AUD` and `TEAM_DOMAIN` values shown there.
-2. If you see `Cloudflare Access must be configured in production`, this application is intentionally enforcing Cloudflare Access so your inbox is not exposed to anyone on the internet.
-   * Resolution: enable Access using [one-click Cloudflare Access for Workers](https://developers.cloudflare.com/changelog/post/2025-10-03-one-click-access-for-workers/), then set the `POLICY_AUD` and `TEAM_DOMAIN` Worker secrets from the modal values.
+1. If you see `Scribase auth must be configured in production`, this application is intentionally refusing to serve any request until `SCRIBASE_URL`, `SCRIBASE_ANON_KEY` and `OWNER_EMAIL` are all set, so your inbox is not exposed to anyone on the internet.
+   * Resolution: provision a Scribase project with email/password sign-in, then set the three values above and redeploy.
+2. If `/login` shows `Invalid email or password`, either the credentials are wrong or they belong to an account other than `OWNER_EMAIL` -- both cases are reported identically on purpose, so a non-owner account can't be used to probe which email is configured.
+3. Sessions are two httpOnly cookies (`sb-access-token`, `sb-refresh-token`). The access token is refreshed silently in the background; if both expire or are revoked, you're redirected back to `/login`.
 
 ## Features
 
@@ -48,7 +48,7 @@ https://github.com/cloudflare/agentic-inbox/issues/4#issuecomment-4269118513
 - **Frontend:** React 19, React Router v7, Tailwind CSS, Zustand, TipTap, `@cloudflare/kumo`
 - **Backend:** Hono, Cloudflare Workers, Durable Objects (SQLite), R2, Email Routing
 - **AI Agent:** Cloudflare Agents SDK (`AIChatAgent`), AI SDK v6, Workers AI (`@cf/moonshotai/kimi-k2.5`), `react-markdown` + `remark-gfm`
-- **Auth:** Cloudflare Access JWT validation (required outside local development)
+- **Auth:** Scribase (self-hosted, Supabase-compatible) owner-only sign-in, validated against `/auth/v1/user` (required outside local development)
 
 ## Getting Started
 
@@ -74,9 +74,9 @@ npm run deploy
 - [Email Routing](https://developers.cloudflare.com/email-routing/) enabled for receiving
 - [Email Service](https://developers.cloudflare.com/email-service/) enabled for sending
 - [Workers AI](https://developers.cloudflare.com/workers-ai/) enabled (for the agent)
-- [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) configured for deployed/shared environments (required in production)
+- A [Scribase](https://scribase.com) project with email/password sign-in enabled, and its own account for the owner (`SCRIBASE_URL`, `SCRIBASE_ANON_KEY`, `OWNER_EMAIL` configured for deployed/shared environments; required in production)
 
-Any user who passes the shared Cloudflare Access policy can access all mailboxes in this app by design. This includes the MCP server at `/mcp` -- external AI tools (Claude Code, Cursor, etc.) connected via MCP can operate on any mailbox by passing a `mailboxId` parameter. There is no per-mailbox authorization; the Cloudflare Access policy is the single trust boundary.
+Only the Scribase account matching `OWNER_EMAIL` can access this app by design. This includes the MCP server at `/mcp` -- external AI tools (Claude Code, Cursor, etc.) connected via MCP can operate on any mailbox by passing a `mailboxId` parameter, once authenticated the same way. There is no per-mailbox authorization; the owner-only auth gate is the single trust boundary.
 
 ## Architecture
 

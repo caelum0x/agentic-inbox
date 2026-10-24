@@ -10,11 +10,13 @@
 		"nodejs_compat"
 	],
 	"vars": {
-		// Production deploys must also define POLICY_AUD and TEAM_DOMAIN.
-		// TEAM_DOMAIN may be the base Access URL or the full /cdn-cgi/access/certs URL.
-		// The worker now fails closed outside local development if Access is not configured.
+		// Production deploys must also define SCRIBASE_URL, SCRIBASE_ANON_KEY and
+		// OWNER_EMAIL (see .dev.vars.example). The worker fails closed outside
+		// local development if Scribase auth is not configured.
 		"DOMAINS": "example.com",
-		"EMAIL_ADDRESSES": []
+		"EMAIL_ADDRESSES": [],
+		"SCRIBASE_URL": "https://agentic-inbox.scribase.com",
+		"OWNER_EMAIL": "subasiarhan3@gmail.com"
 	},
 	"send_email": [
 		{
@@ -32,6 +34,20 @@
 	"ai": {
 		"binding": "AI"
 	},
+	// Native Workers rate limiting for POST /login: only one real account can
+	// ever sign in (OWNER_EMAIL), so unlimited password attempts amount to
+	// unlimited brute-force against one password. 10 attempts per 60s per
+	// IP+email key (see workers/app.ts).
+	"ratelimits": [
+		{
+			"name": "LOGIN_RATE_LIMITER",
+			"namespace_id": "1001",
+			"simple": {
+				"limit": 10,
+				"period": 60
+			}
+		}
+	],
 	"durable_objects": {
 		"bindings": [
 			{

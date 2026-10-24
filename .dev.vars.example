@@ -1,3 +1,7 @@
-# Cloudflare Access (required in production). TEAM_DOMAIN may be the base Access URL or the full /cdn-cgi/access/certs URL.
-POLICY_AUD=your-access-policy-audience-tag
-TEAM_DOMAIN=https://your-team.cloudflareaccess.com
+# Scribase auth (required in production; the dev server skips this check entirely).
+# SCRIBASE_URL: base URL of the Scribase project that authenticates this app's owner.
+# SCRIBASE_ANON_KEY: that project's public anon/publishable key (safe to ship).
+# OWNER_EMAIL: the only account allowed to sign in.
+SCRIBASE_URL=https://agentic-inbox.scribase.com
+SCRIBASE_ANON_KEY=your-scribase-anon-key
+OWNER_EMAIL=you@example.com
